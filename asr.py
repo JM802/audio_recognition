@@ -111,7 +111,6 @@ async def shutdown_event():
     print("已安全关闭资源。")
 
 async def recognition_loop():
-    output_file = os.path.join(os.environ['MODELSCOPE_CACHE'], "learning_results.txt")
     while True:
         if state.status != AudioState.RECORDING:
             await asyncio.sleep(0.5)
@@ -147,10 +146,6 @@ async def recognition_loop():
                 # 过滤掉过短的无意义噪音和重复内容
                 if len(clean_result) > 1 and clean_result != state.last_text:
                     print(f"\r[识别]: {clean_result}          ", flush=True)
-                    
-                    # 保存到汇总文件
-                    with open(output_file, "a", encoding="utf-8") as f:
-                        f.write(clean_result + "\n")
                         
                     # 创建子文件夹并保存单次结果
                     if state.current_session_dir:
