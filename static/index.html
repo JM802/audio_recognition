@@ -1,0 +1,21 @@
+# 语音助手问题修复及优化
+
+- [x] Phase 1: Planning
+  - [x] Analyze codebase
+  - [x] Create implementation plan
+- [x] Phase 2: 后端修改 (Backend)
+  - [x] Wrap PyAudio start_stream/stop_stream in async threads to prevent blocking API requests.
+  - [x] Fix newline handling so that segments append continuously unless paused, and save when stopped.
+  - [x] Ensure history APIs are correct and robust for sidebar switching.
+- [x] Phase 3: 前端修改 (Frontend)
+  - [x] Add visual Toast notifications for "Start", "Pause", "Stop".
+  - [x] Change UI state text synchronously before fetch request to prevent lag perception.
+  - [x] Implement Sidebar for History Folders (view and select).
+  - [x] Support manually creating a folder (already partly there via input, but improve logic).
+  - [x] Render STT output continuously without auto newlines (append texts intelligently).
+  - [x] Make `outputBox` editable (`contenteditable="true"`).
+  - [x] Redesign Copy Button.
+  - [x] Remove "w" logo from bottom.
+  - [x] Address "Idle state text missing/not updating" bug.
+- [/] Phase 4: 测试与查漏补缺 (Polish)
+  - [/] Run `test_audio_utils.py` and modify/add tests if needed.

@@ -1,0 +1,9 @@
+models
+output
+hf_cache
+__pycache__
+.lock
+.vscode
+ffmpeg-8.0.1-essentials_build
+.venv
+.env
