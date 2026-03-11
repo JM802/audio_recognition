@@ -1,21 +1,828 @@
-# 语音助手问题修复及优化
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>智能语音助手 - 灵感画布</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+  
+  <style>
+    :root {
+      --sidebar-width: 280px;
+      --sidebar-bg: #F9FAFB;
+      --sidebar-border: #E5E7EB;
+      --primary: #4F46E5;
+      --danger: #EF4444;
+      --warning: #F59E0B;
+      --text-main: #111827;
+      --text-muted: #6B7280;
+    }
 
-- [x] Phase 1: Planning
-  - [x] Analyze codebase
-  - [x] Create implementation plan
-- [x] Phase 2: 后端修改 (Backend)
-  - [x] Wrap PyAudio start_stream/stop_stream in async threads to prevent blocking API requests.
-  - [x] Fix newline handling so that segments append continuously unless paused, and save when stopped.
-  - [x] Ensure history APIs are correct and robust for sidebar switching.
-- [x] Phase 3: 前端修改 (Frontend)
-  - [x] Add visual Toast notifications for "Start", "Pause", "Stop".
-  - [x] Change UI state text synchronously before fetch request to prevent lag perception.
-  - [x] Implement Sidebar for History Folders (view and select).
-  - [x] Support manually creating a folder (already partly there via input, but improve logic).
-  - [x] Render STT output continuously without auto newlines (append texts intelligently).
-  - [x] Make `outputBox` editable (`contenteditable="true"`).
-  - [x] Redesign Copy Button.
-  - [x] Remove "w" logo from bottom.
-  - [x] Address "Idle state text missing/not updating" bug.
-- [/] Phase 4: 测试与查漏补缺 (Polish)
-  - [/] Run `test_audio_utils.py` and modify/add tests if needed.
+    body, html {
+      margin: 0;
+      padding: 0;
+      width: 100vw;
+      height: 100vh;
+      font-family: 'Outfit', sans-serif;
+      overflow: hidden;
+      display: flex;
+    }
+
+    /* === Siderbar (Notion Style) === */
+    #sidebar {
+      width: var(--sidebar-width);
+      min-width: var(--sidebar-width);
+      height: 100vh;
+      background: var(--sidebar-bg);
+      border-right: 1px solid var(--sidebar-border);
+      transition: margin-left 0.3s ease;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      z-index: 50;
+      overflow: hidden; /* Prevent text wrap squashing when hidden */
+    }
+
+    #sidebar.collapsed {
+      margin-left: calc(var(--sidebar-width) * -1);
+      border-right: none;
+    }
+
+    .sidebar-header {
+      padding: 15px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--sidebar-border);
+      flex-shrink: 0;
+    }
+
+    .sidebar-header h2 {
+      margin: 0;
+      font-size: 1.1rem;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tree-view {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 0;
+    }
+
+    .tree-node {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .tree-row {
+      display: flex;
+      align-items: center;
+      padding: 6px 12px;
+      cursor: pointer;
+      color: var(--text-main);
+      font-size: 0.95rem;
+      position: relative;
+      transition: background 0.15s;
+      min-height: 28px;
+    }
+
+    .tree-row:hover {
+      background: #F3F4F6;
+    }
+    
+    .tree-row.active {
+      background: #EEF2FF;
+      color: var(--primary);
+      font-weight: 500;
+    }
+
+    /* Connect line for tree structure */
+    .tree-children {
+      margin-left: 14px;
+      border-left: 1px solid #E5E7EB;
+      padding-left: 8px;
+    }
+
+    .row-icon {
+      font-size: 18px;
+      margin-right: 6px;
+      color: var(--text-muted);
+    }
+    .tree-row.active .row-icon {
+      color: var(--primary);
+    }
+
+    .row-text {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Hover Menu */
+    .row-actions {
+      display: none;
+      align-items: center;
+      gap: 4px;
+    }
+    .tree-row:hover .row-actions {
+      display: flex;
+    }
+    
+    .action-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 2px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .action-btn:hover { background: #E5E7EB; color: var(--text-main); }
+
+    .tree-view::-webkit-scrollbar { width: 4px; }
+    .tree-view::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 4px; }
+
+
+    /* === Main Content Area (Colorful Concentric UI) === */
+    #main-content {
+      position: relative;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      /* Accurate rendering of the colorful banded rings from the reference image */
+      background: repeating-radial-gradient(
+        circle at 50% 50%,
+        #061d3e 0%,
+        #061d3e 5%,
+        #1a3673 10%,
+        #2c5b9f 15%,
+        #3d8b9d 20%,
+        #5eb381 25%,
+        #a9cc64 30%,
+        #dec058 35%,
+        #de7e53 40%,
+        #c2445b 45%,
+        #8c2d68 50%,
+        #5c2463 55%,
+        #2a164b 60%
+      );
+      background-size: 300vmax 300vmax;
+      background-position: center;
+    }
+
+    .top-bar {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      z-index: 10;
+    }
+
+    .toggle-sidebar-btn {
+      background: rgba(255,255,255,0.8);
+      border: none;
+      border-radius: 8px;
+      padding: 8px;
+      cursor: pointer;
+      color: var(--text-main);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      backdrop-filter: blur(5px);
+      transition: all 0.2s;
+    }
+    .toggle-sidebar-btn:hover { background: white; transform: scale(1.05); }
+
+    /* Center Circle Dashboard */
+    .center-dashboard-container {
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      position: relative;
+      z-index: 5;
+    }
+
+    .center-circle {
+      width: 70vmin;
+      height: 70vmin;
+      max-width: 650px;
+      max-height: 650px;
+      background-color: #061d3e;
+      border-radius: 50%;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+      /* content centering */
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 50px;
+      box-sizing: border-box;
+      color: white;
+      transition: all 0.3s ease;
+    }
+
+    /* Dashboard Elements */
+    .title-area {
+      text-align: center;
+      margin-bottom: 25px;
+    }
+    
+    .title-area h1 {
+      font-size: 2rem;
+      font-weight: 500;
+      margin: 0 0 10px 0;
+      letter-spacing: 1px;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: rgba(255,255,255,0.8);
+      font-size: 0.95rem;
+    }
+
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .status-dot.idle { background: #9CA3AF; }
+    .status-dot.recording { background: #10B981; animation: pulse 1.5s infinite; }
+    .status-dot.paused { background: var(--warning); }
+
+    @keyframes pulse {
+      0% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.8); opacity: 0.5; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
+    /* Selected Path info */
+    .current-path-info {
+      font-size: 0.85rem;
+      color: #9CA3AF;
+      margin-bottom: 25px;
+      background: rgba(255,255,255,0.05);
+      padding: 6px 15px;
+      border-radius: 20px;
+      max-width: 80%;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .controls {
+      display: flex;
+      gap: 15px;
+      margin-bottom: 30px;
+    }
+
+    .btn {
+      padding: 12px 28px;
+      border-radius: 30px;
+      border: none;
+      font-size: 1rem;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s;
+    }
+    .btn-primary { background: white; color: #061d3e; }
+    .btn-primary:hover { box-shadow: 0 0 20px rgba(255,255,255,0.3); transform: translateY(-2px); }
+    .btn-warning { background: var(--warning); color: white; }
+    .btn-danger { background: var(--danger); color: white; }
+    
+    .btn:active { transform: translateY(0); }
+
+    /* Output Editor Area within the Circle */
+    .output-container {
+      width: 100%;
+      flex: 1;
+      max-height: 25vh;
+      background: rgba(0,0,0,0.3);
+      border-radius: 20px;
+      border: 1px solid rgba(255,255,255,0.1);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+    
+    .output-header {
+      padding: 12px 20px;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .copy-btn {
+      background: transparent;
+      color: rgba(255,255,255,0.7);
+      border: 1px solid rgba(255,255,255,0.3);
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .copy-btn:hover { background: rgba(255,255,255,0.1); color: white; }
+
+    .output-box {
+      flex: 1;
+      padding: 20px;
+      overflow-y: auto;
+      font-size: 1rem;
+      line-height: 1.6;
+      outline: none;
+      color: rgba(255,255,255,0.9);
+      text-align: left;
+    }
+    .output-box p { margin-top: 0; margin-bottom: 10px; }
+    .output-box:empty:before {
+      content: attr(data-placeholder);
+      color: rgba(255,255,255,0.3);
+      pointer-events: none;
+    }
+    
+    .output-box::-webkit-scrollbar { width: 4px; }
+    .output-box::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.3); border-radius: 4px; }
+
+
+    /* Add Folder Dialog Modal */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(3px);
+      z-index: 999;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal {
+      background: white;
+      padding: 25px;
+      border-radius: 12px;
+      width: 90%;
+      max-width: 400px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    }
+    .modal h3 { margin-top: 0; margin-bottom: 15px; color: var(--text-main); font-size: 1.2rem; }
+    .modal input {
+      width: 100%;
+      padding: 10px 15px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 1rem;
+      margin-bottom: 20px;
+      box-sizing: border-box;
+      outline: none;
+    }
+    .modal input:focus { border-color: var(--primary); }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
+    .modal-btn { padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 0.95rem; }
+    .btn-cancel { background: #E5E7EB; color: var(--text-main); }
+    .btn-confirm { background: var(--primary); color: white; }
+
+    /* Toast */
+    #toast-container { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); z-index: 1000; display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
+    .toast { background: rgba(17, 24, 39, 0.9); backdrop-filter: blur(5px); color: white; padding: 12px 24px; border-radius: 30px; font-size: 0.95rem; display: flex; align-items: center; gap: 10px; animation: slideUp 0.3s ease-out; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
+    .toast.hide { animation: fadeOut 0.3s ease-in forwards; }
+    @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    @keyframes fadeOut { from { transform: translateY(0); opacity: 1; } to { transform: translateY(-20px); opacity: 0; } }
+  </style>
+</head>
+<body>
+
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <div class="sidebar-header">
+      <h2><span class="material-icons" style="font-size: 20px">dns</span> 工作区</h2>
+      <button class="action-btn" onclick="openModal('create', '')" title="新建对话"><span class="material-icons">add</span></button>
+    </div>
+    <div class="tree-view" id="treeView">
+      <div style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 0.9rem;">加载中...</div>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div id="main-content">
+    <div class="top-bar">
+      <button class="toggle-sidebar-btn" onclick="toggleSidebar()">
+        <span class="material-icons">menu_open</span>
+      </button>
+    </div>
+
+    <div class="center-dashboard-container">
+      <div class="center-circle">
+        
+        <div class="title-area">
+          <h1>灵感捕捉印记</h1>
+          <div class="status-badge" id="statusBadge">
+            <div class="status-dot idle" id="statusDot"></div>
+            <span id="statusText">准备就绪 (Idle)</span>
+          </div>
+        </div>
+
+        <div class="current-path-info" id="currentPathInfo">
+          当前对话位置: <span style="color: white; font-weight:500;">/</span>
+        </div>
+
+        <div class="controls">
+          <button class="btn btn-primary" id="btnStart" onclick="startRecording()">
+            <span class="material-icons">mic</span> 启动拾音 (入该对话)
+          </button>
+          <button class="btn btn-warning" id="btnPause" onclick="pauseRecording()" style="display: none;">
+            <span class="material-icons">pause</span> 暂停
+          </button>
+          <button class="btn btn-danger" id="btnStop" onclick="stopRecording()" style="display: none;">
+            <span class="material-icons">stop</span> 结束并保存
+          </button>
+        </div>
+
+        <div class="output-container">
+          <div class="output-header">
+            <span style="font-size: 0.9rem; color: rgba(255,255,255,0.6);" id="outputTitle">实时文本编辑流</span>
+            <button class="copy-btn" onclick="copyText()">复制</button>
+          </div>
+          <div class="output-box" id="outputBox" contenteditable="true" data-placeholder="语音识别出来的文字会在这里像水流一样出现。若遇瑕疵，可直接键入修改..."></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal">
+      <h3 id="modalTitle">操作</h3>
+      <input type="text" id="modalInput" placeholder="输入名称..." autocomplete="off">
+      <div class="modal-actions">
+        <button class="modal-btn btn-cancel" onclick="closeModal()">取消</button>
+        <button class="modal-btn btn-confirm" id="modalConfirmBtn">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-container"></div>
+
+  <script>
+    const API_URL = "";
+    let pollInterval = null;
+    let currentState = "idle";
+    
+    // Global active path selection
+    let activeFolderPath = ""; 
+    let initialLoadComplete = false;
+    
+    // Modal Context
+    let currentModalAction = "";
+    let currentModalTargetPath = "";
+
+    const btnStart = document.getElementById("btnStart");
+    const btnPause = document.getElementById("btnPause");
+    const btnStop = document.getElementById("btnStop");
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("statusText");
+    const outputBox = document.getElementById("outputBox");
+    const treeView = document.getElementById("treeView");
+    const currentPathInfo = document.getElementById("currentPathInfo");
+    const modalOverlay = document.getElementById("modalOverlay");
+    const modalInput = document.getElementById("modalInput");
+
+    let localParagraphs = 0;
+
+    function toggleSidebar() {
+      document.getElementById('sidebar').classList.toggle("collapsed");
+    }
+
+    function showToast(message, icon = "info") {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.className = 'toast';
+      toast.innerHTML = `<span class="material-icons" style="font-size:18px">${icon}</span> ${message}`;
+      container.appendChild(toast);
+      
+      setTimeout(() => {
+        toast.classList.add('hide');
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    }
+
+    function setUIStateImmediate(state) {
+      currentState = state;
+      statusDot.className = `status-dot ${state}`;
+      
+      if (state === "idle") {
+        statusText.innerText = "准备就绪";
+        btnStart.style.display = "flex";
+        btnStart.innerHTML = `<span class="material-icons">mic</span> 启动拾音 (入该对话)`;
+        btnPause.style.display = "none";
+        btnStop.style.display = "none";
+        if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+      } else if (state === "recording") {
+        statusText.innerText = "正在接收灵感...";
+        btnStart.style.display = "none";
+        btnPause.style.display = "flex";
+        btnStop.style.display = "flex";
+        if (!pollInterval) pollInterval = setInterval(fetchTexts, 800);
+      } else if (state === "paused") {
+        statusText.innerText = "拾音已暂停";
+        btnStart.style.display = "flex";
+        btnStart.innerHTML = `<span class="material-icons">play_arrow</span> 继续`;
+        btnPause.style.display = "none";
+        btnStop.style.display = "flex";
+      } else if (state === "processing") {
+        statusText.innerText = "处理中...";
+        btnStart.disabled = true; btnPause.disabled = true; btnStop.disabled = true;
+      }
+      
+      if(state !== "processing") {
+        btnStart.disabled = false; btnPause.disabled = false; btnStop.disabled = false;
+      }
+    }
+
+    async function checkStatus() {
+      try {
+        const res = await fetch(`${API_URL}/api/status`);
+        const data = await res.json();
+        setUIStateImmediate(data.status);
+      } catch (e) {
+        console.error("API Error");
+      }
+      loadTree();
+    }
+
+    // --- Audio Control ---
+    async function startRecording() {
+      setUIStateImmediate("processing");
+      
+      try {
+        const res = await fetch(`${API_URL}/api/start`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ parent_path: activeFolderPath }),
+        });
+        const data = await res.json();
+        
+        if (data.status === "success") {
+          setUIStateImmediate("recording");
+          showToast("录音已启动", "mic");
+          
+          if(data.session_dir) {
+             const parts = data.session_dir.split(/[\\/]/);
+             // attempt to extract relative path
+             let relPath = parts[parts.length-1];
+             if(data.session_dir.includes("output")) {
+                 const outputIndex = parts.indexOf("output");
+                 relPath = parts.slice(outputIndex + 1).join("/");
+             }
+             activeFolderPath = relPath;
+             document.getElementById('currentPathInfo').innerHTML = `当前对话位置: <span style="color: white; font-weight:500;">/${activeFolderPath}</span>`;
+             document.getElementById('outputTitle').innerText = "当前会话: " + relPath.split('/').pop();
+          }
+
+          if (localParagraphs === 0) outputBox.innerHTML = ""; 
+          
+          loadTree();
+        } else {
+          setUIStateImmediate("idle");
+          showToast(data.message || "启动失败", "error");
+        }
+      } catch(e) {
+        setUIStateImmediate("idle");
+        showToast("网络请求失败", "error");
+      }
+    }
+
+    async function pauseRecording() {
+      setUIStateImmediate("processing");
+      try {
+        await fetch(`${API_URL}/api/pause`, { method: "POST" });
+        setUIStateImmediate("paused");
+      } catch(e) { setUIStateImmediate("recording"); }
+    }
+
+    async function stopRecording() {
+      setUIStateImmediate("processing");
+      try {
+        const res = await fetch(`${API_URL}/api/stop`, { method: "POST" });
+        const data = await res.json();
+        if (data.status === "success") {
+          setUIStateImmediate("idle");
+          await fetchTexts();
+          showToast("录音已安全保存!", "check_circle");
+          localParagraphs = 0; 
+          loadTree();
+        }
+      } catch(e) { setUIStateImmediate("paused"); }
+    }
+
+    // --- Text Rendering ---
+    async function fetchTexts() {
+      try {
+        const res = await fetch(`${API_URL}/api/text`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.texts && data.texts.length > 0) renderTextsSmartly(data.texts);
+        }
+      } catch (e) {}
+    }
+
+    function renderTextsSmartly(textsArray) {
+      const pElements = outputBox.querySelectorAll('p');
+      if (textsArray.length < localParagraphs && currentState === "idle") {
+         outputBox.innerHTML = "";
+         localParagraphs = 0;
+      }
+      for (let i = 0; i < textsArray.length; i++) {
+        let textPart = textsArray[i];
+        if (textPart === "\n") textPart = "";
+        if (i < pElements.length) {
+          if (i === textsArray.length - 1 && textPart.trim().length > 0) {
+             const currentDOMText = pElements[i].innerText.replace(/[\n\r]/g, '');
+             if (textPart !== currentDOMText && textPart.length > currentDOMText.length) {
+               pElements[i].innerText = textPart;
+               outputBox.scrollTop = outputBox.scrollHeight;
+             }
+          }
+        } else {
+          if (textPart.trim().length > 0 || textPart === "") {
+             const newP = document.createElement("p");
+             newP.innerText = textPart;
+             outputBox.appendChild(newP);
+             outputBox.scrollTop = outputBox.scrollHeight;
+          }
+        }
+      }
+      localParagraphs = outputBox.querySelectorAll('p').length;
+    }
+
+    // --- Tree & Folder Management ---
+    async function loadTree() {
+      try {
+        const res = await fetch(`${API_URL}/api/folder/tree`);
+        const data = await res.json();
+        treeView.innerHTML = renderTreeNodes(data.tree);
+        
+        // Auto-select latest session on first load if nothing active yet
+        if(!initialLoadComplete && !activeFolderPath && data.tree && data.tree.length > 0) {
+            initialLoadComplete = true;
+            // The python function sorts by modification time descending -> index 0 is newest
+            selectFolder(data.tree[0].id, null);
+        }
+      } catch (e) {
+        treeView.innerHTML = `<div style="padding: 20px; text-align:center; color: var(--danger);">加载失败</div>`;
+      }
+    }
+
+    function renderTreeNodes(nodes) {
+      if(!nodes || nodes.length === 0) return `<div style="padding: 10px 20px; color:var(--text-muted); font-size:0.9rem;">空</div>`;
+      
+      let html = '';
+      nodes.forEach(node => {
+        const hasChildren = node.children && node.children.length > 0;
+        const isActive = activeFolderPath === node.id ? 'active' : '';
+        
+        html += `
+          <div class="tree-node">
+            <div class="tree-row ${isActive}" onclick="selectFolder('${node.id}', event)">
+              <span class="material-icons row-icon">${hasChildren ? 'folder_open' : 'folder'}</span>
+              <span class="row-text" title="${node.name}">${node.name}</span>
+              <div class="row-actions" onclick="event.stopPropagation()">
+                <button class="action-btn" title="在该对话下新建子类" onclick="openModal('create', '${node.id}')"><span class="material-icons" style="font-size:16px;">add</span></button>
+                <button class="action-btn" title="重命名" onclick="openModal('rename', '${node.id}', '${node.name}')"><span class="material-icons" style="font-size:16px;">edit</span></button>
+                <button class="action-btn" style="color:var(--danger);" title="删除" onclick="openModal('delete', '${node.id}', '${node.name}')"><span class="material-icons" style="font-size:16px;">delete</span></button>
+              </div>
+            </div>
+            ${hasChildren ? `<div class="tree-children">${renderTreeNodes(node.children)}</div>` : ''}
+          </div>
+        `;
+      });
+      return html;
+    }
+
+    async function selectFolder(pathId, event) {
+      if (currentState !== "idle") {
+        showToast("录音期间暂不支持切换目录", "warning"); return;
+      }
+      
+      activeFolderPath = pathId;
+      document.getElementById('currentPathInfo').innerHTML = `当前对话位置: <span style="color: white; font-weight:500;">/${pathId}</span>`;
+      
+      // Update the visual "active" class highlight safely manually
+      const rows = document.querySelectorAll('.tree-row');
+      rows.forEach(r => r.classList.remove('active'));
+      // Event context might be null for auto select, loadTree covers DOM rebuild anyway, but we update DOM to be fast
+      
+      outputBox.innerHTML = '<span style="color: rgba(255,255,255,0.5)">正在回忆之中...</span>';
+      document.getElementById('outputTitle').innerText = "历史预览: " + pathId.split('/').pop();
+      try {
+        const res = await fetch(`${API_URL}/api/history/${pathId}`);
+        const data = await res.json();
+        if (data.texts && data.texts.length > 0) {
+            outputBox.innerHTML = data.texts.map(t => `<p>${t}</p>`).join("");
+            outputBox.scrollTop = outputBox.scrollHeight;
+        } else {
+            outputBox.innerHTML = '<span style="color: rgba(255,255,255,0.5)">这里暂时没有内容。点击上方启动拾音写下开篇吧！</span>';
+        }
+      } catch (e) {
+        outputBox.innerHTML = '<span style="color: var(--danger)">加载失败</span>';
+      }
+      loadTree(); 
+    }
+
+    // --- Modal Logic ---
+    function openModal(action, targetPath, originalName="") {
+      currentModalAction = action;
+      currentModalTargetPath = targetPath;
+      modalInput.value = "";
+      
+      if(action === 'create') {
+        document.getElementById('modalTitle').innerText = targetPath ? `在 /${targetPath} 下新建文件夹` : "新建对话记录";
+        modalInput.placeholder = "请输入新记录的名称...";
+        modalInput.style.display = "block";
+      } else if (action === 'rename') {
+        document.getElementById('modalTitle').innerText = `重命名 '${originalName}'`;
+        modalInput.value = originalName;
+        modalInput.placeholder = "请输入新名称...";
+        modalInput.style.display = "block";
+      } else if (action === 'delete') {
+        document.getElementById('modalTitle').innerText = `确定要永久删除 '${originalName}' 和里面所有的录音段落吗？`;
+        modalInput.style.display = "none";
+      }
+      
+      modalOverlay.style.display = "flex";
+      if(action !== 'delete') setTimeout(() => modalInput.focus(), 100);
+    }
+
+    function closeModal() {
+      modalOverlay.style.display = "none";
+    }
+
+    document.getElementById('modalConfirmBtn').addEventListener('click', async () => {
+      const val = modalInput.value.trim();
+      let res, data;
+      
+      try {
+        if(currentModalAction === 'create') {
+          if(!val) { showToast("名字不能留白哦", "error"); return; }
+          res = await fetch(`${API_URL}/api/folder/create`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ parent_path: currentModalTargetPath, folder_name: val }) });
+        } else if (currentModalAction === 'rename') {
+          if(!val) { showToast("新名字不能留白哦", "error"); return; }
+          res = await fetch(`${API_URL}/api/folder/rename`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ target_path: currentModalTargetPath, new_name: val }) });
+        } else if (currentModalAction === 'delete') {
+          res = await fetch(`${API_URL}/api/folder/delete`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ target_path: currentModalTargetPath }) });
+        }
+        
+        data = await res.json();
+        if(data.status === 'success') {
+          showToast(data.message, "check_circle");
+          if(currentModalAction === 'delete' && activeFolderPath.startsWith(currentModalTargetPath)) {
+             activeFolderPath = "";
+             document.getElementById('currentPathInfo').innerHTML = `当前对话位置: <span style="color: white; font-weight:500;">/</span>`;
+             outputBox.innerHTML = "";
+          }
+          if(currentModalAction === 'create') {
+             // select it automatically
+             const newPath = currentModalTargetPath ? currentModalTargetPath + "/" + val : val;
+             activeFolderPath = newPath;
+             document.getElementById('currentPathInfo').innerHTML = `当前对话位置: <span style="color: white; font-weight:500;">/${newPath}</span>`;
+             outputBox.innerHTML = "";
+             document.getElementById('outputTitle').innerText = "当前会话: " + val;
+          }
+          if(currentModalAction === 'rename' && activeFolderPath.startsWith(currentModalTargetPath)) {
+             // Note: For deep rename, tracking active is tricky, we just reset it to root for safety to avoid crash
+             activeFolderPath = "";
+             document.getElementById('currentPathInfo').innerHTML = `当前对话位置: <span style="color: white; font-weight:500;">/</span>`;
+             outputBox.innerHTML = "";
+          }
+          closeModal();
+          loadTree();
+        } else {
+          showToast(data.message, "error");
+        }
+      } catch(e) { showToast("操作失败", "error"); closeModal(); }
+    });
+
+    async function copyText() {
+      const textToCopy = outputBox.innerText;
+      if (!textToCopy.trim()) { showToast("没有内容可复制", "error_outline"); return; }
+      try {
+        await navigator.clipboard.writeText(textToCopy);
+        showToast("已复制到剪贴板！", "library_add_check");
+      } catch (err) {
+        const ta = document.createElement("textarea");
+        ta.value = textToCopy; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta);
+        showToast("已复制到剪贴板！", "library_add_check");
+      }
+    }
+
+    // Init
+    checkStatus();
+  </script>
+</body>
+</html>

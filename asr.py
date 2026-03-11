@@ -22,6 +22,14 @@ from audio_utils import (
     AudioState
 )
 
+from file_utils import (
+    get_folder_tree,
+    create_nested_folder,
+    rename_folder,
+    delete_folder,
+    get_session_texts_nested
+)
+
 # 路径与环境配置
 os.environ['MODELSCOPE_CACHE'] = r'F:\audio_recognition'
 os.environ['HF_HOME'] = r'F:\audio_recognition\hf_cache'
@@ -128,7 +136,7 @@ async def recognition_loop():
                 state.model.generate,
                 input=audio_data, 
                 cache={}, 
-                language="auto", 
+                language="zh", 
                 use_itn=True
             )
             
@@ -167,8 +175,10 @@ async def recognition_loop():
 
 # --- API 接口部分 ---
 
+import datetime
+
 class StartRequest(BaseModel):
-    session_name: str = "default_session"
+    parent_path: str = "" # 确切录制存放的相对路径
 
 @app.post("/api/start")
 async def start_recording(req: StartRequest):
@@ -176,14 +186,25 @@ async def start_recording(req: StartRequest):
         return {"status": "error", "message": "已经在录音中"}
         
     if state.status == AudioState.IDLE:
-        # 创建新的会话文件夹
         base_dir = os.path.join(os.environ['MODELSCOPE_CACHE'], "output")
-        state.current_session_dir = create_session_folder(base_dir, req.session_name)
-        state.session_texts = []
+        if not req.parent_path:
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            req.parent_path = f"新对话_{timestamp}"
+            
+        target_dir = os.path.join(base_dir, req.parent_path.strip('/'))
+        os.makedirs(target_dir, exist_ok=True)
+        
+        state.current_session_dir = target_dir
+        
+        # 提前加载历史，这样新录音接着历史后面，而不是替换掉第一条历史记录
+        history_texts = get_session_texts_nested(base_dir, req.parent_path)
+        state.session_texts = history_texts
+        if state.session_texts and state.session_texts[-1] != "\n":
+            state.session_texts.append("\n")
     
     state.status = AudioState.RECORDING
     await asyncio.to_thread(state.stream.start_stream)
-    return {"status": "success", "message": "开始录音，输出目录已准备", "session_dir": state.current_session_dir}
+    return {"status": "success", "message": "开始录音", "session_dir": state.current_session_dir}
 
 @app.post("/api/pause")
 async def pause_recording():
@@ -223,6 +244,7 @@ async def get_text():
 
 @app.get("/api/history")
 async def get_history():
+    # 保持向后兼容（但前端应换用 tree 接口）
     base_dir = os.path.join(os.environ['MODELSCOPE_CACHE'], "output")
     if not os.path.exists(base_dir):
         return {"history": []}
@@ -235,27 +257,44 @@ async def get_history():
     sessions.sort(reverse=True)
     return {"history": sessions}
 
-@app.get("/api/history/{session_name}")
-async def get_session_history(session_name: str):
+# 新增：树形嵌套接口相关
+
+@app.get("/api/folder/tree")
+async def api_folder_tree():
     base_dir = os.path.join(os.environ['MODELSCOPE_CACHE'], "output")
-    session_dir = os.path.join(base_dir, session_name)
-    if not os.path.exists(session_dir):
-        return {"texts": []}
-        
-    texts = []
-    segments = []
-    for d in os.listdir(session_dir):
-        seg_dir = os.path.join(session_dir, d)
-        if os.path.isdir(seg_dir):
-            segments.append(seg_dir)
-            
-    segments.sort()
-    for seg in segments:
-        txt_path = os.path.join(seg, "result.txt")
-        if os.path.exists(txt_path):
-            with open(txt_path, "r", encoding="utf-8") as f:
-                texts.append(f.read().strip())
-                
+    tree = get_folder_tree(base_dir)
+    return {"tree": tree}
+
+class CreateFolderReq(BaseModel):
+    parent_path: str = ""
+    folder_name: str
+
+@app.post("/api/folder/create")
+async def api_folder_create(req: CreateFolderReq):
+    base_dir = os.path.join(os.environ['MODELSCOPE_CACHE'], "output")
+    return create_nested_folder(base_dir, req.parent_path, req.folder_name)
+
+class RenameFolderReq(BaseModel):
+    target_path: str
+    new_name: str
+
+@app.post("/api/folder/rename")
+async def api_folder_rename(req: RenameFolderReq):
+    base_dir = os.path.join(os.environ['MODELSCOPE_CACHE'], "output")
+    return rename_folder(base_dir, req.target_path, req.new_name)
+
+class DeleteFolderReq(BaseModel):
+    target_path: str
+
+@app.post("/api/folder/delete")
+async def api_folder_delete(req: DeleteFolderReq):
+    base_dir = os.path.join(os.environ['MODELSCOPE_CACHE'], "output")
+    return delete_folder(base_dir, req.target_path)
+
+@app.get("/api/history/{session_path:path}")
+async def get_session_history(session_path: str):
+    base_dir = os.path.join(os.environ['MODELSCOPE_CACHE'], "output")
+    texts = get_session_texts_nested(base_dir, session_path)
     return {"texts": texts}
 
 @app.get("/", response_class=HTMLResponse)
